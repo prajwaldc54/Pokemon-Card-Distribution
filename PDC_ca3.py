@@ -147,3 +147,168 @@ def exact_discard_from_larger(values, left_idxs, right_idxs):
     # If we reach here, exact equality by local discards failed.
     return left_idxs, right_idxs, []
 
+def fallback_equalize_globally(values):
+    """
+    Always-produce-equality fallback for the G=2 no-favorite case.
+    Uses the full deck to create two exactly equal piles by discarding as needed.
+    Strategy:
+      1) Choose subset S close to total//2 using DP on ALL items.
+      2) Let R = complement. If sum(R) == sum(S), done.
+      3) Otherwise discard from R a subset that equals (sum(R) - sum(S)).
+      4) If even that is impossible (very rare), discard everything so both are 0.
+    Returns: (pileA, pileB, discards) as lists of global indices.
+    """
+    n = len(values)
+    total = sum(values)
+    target = total // 2
+    S_rel, sS = subset_sum_indices(values, target)
+    S_set = set(S_rel)
+    R = [i for i in range(n) if i not in S_set]
+    sR = sum(values[i] for i in R)
+    if sR == sS:
+        return S_rel, R, []
+
+    diff = sR - sS  # >= 0 because sS is <= total//2
+    R_vals = [values[i] for i in R]
+    pick_rel, got = subset_sum_indices(R_vals, diff)
+    if got == diff:
+        discard_from_R = {R[j] for j in pick_rel}
+        new_R = [i for i in R if i not in discard_from_R]
+        return S_rel, new_R, sorted(discard_from_R)
+
+    # Last-resort equality: both get 0 (discard all).
+    return [], [], list(range(n))
+
+def three_way_partition(values):
+    """
+    Heuristic DP for k=3:
+      - pick T1 ~ S/3 via subset-sum on all items,
+      - from the remainder pick T2 ~ S/3 via subset-sum,
+      - T3 is the rest.
+    Returns three lists of indices (relative to 'values').
+    """
+    n = len(values)
+    total = sum(values)
+    target = total // 3
+
+    # T1
+    T1_rel, _ = subset_sum_indices(values, target)
+    T1_set = set(T1_rel)
+    rem1 = [i for i in range(n) if i not in T1_set]
+    rem_vals = [values[i] for i in rem1]
+
+    # T2 on remaining
+    T2_rel_in_rem, _ = subset_sum_indices(rem_vals, target)
+    T2 = [rem1[j] for j in T2_rel_in_rem]
+
+    T2_set = set(T2)
+    T3 = [i for i in range(n) if i not in T1_set and i not in T2_set]
+    return T1_rel, T2, T3
+
+# ---------------------------------------------------------
+# Main assignment (PDC_ca3)
+# ---------------------------------------------------------
+
+def PDC_ca3(A, G, fav_name=None, random_seed=None, verbose=True):
+    """
+    A: list[int] (1..4096 length, values 1..50)
+    G: 1, 2, or 3
+    fav_name: optional override for favorite; default uses initials (Melanie for you)
+    random_seed: to reproduce random scenario selection
+    verbose: print human-readable output if True (silence for experiments)
+    """
+    if random_seed is not None:
+        random.seed(random_seed)
+
+    n = len(A)
+    fav = (fav_name or MY_FAVORITE).lower()
+    second_fav = pick_second_favorite(fav) if G == 3 else None
+
+    if verbose:
+        print("\n\n*** Main Assignment ***\n")
+        print(f"Grandma Rosa has a deck of {n} cards and wants to distribute it to {G} grandchild(ren).")
+        print(f"When she passed, her favorite grandchild was {fav.capitalize()}.")
+
+    # Randomly select G grandchildren per spec
+    choices = list(combinations(GRANDCHILDREN, G))
+    scenario = random.choice(choices)
+    scenario_set = set(scenario)
+    if verbose:
+        print(f"\nScenario – Randomly selected: {', '.join(nm.capitalize() for nm in scenario)}")
+        print(f"Favorite included? {'Yes' if fav in scenario_set else 'No'}")
+        if G == 3:
+            print(f"Second favorite (policy): {second_fav.capitalize()}")
+
+    # Prepare allocations (indices into A)
+    allocations = {name: [] for name in GRANDCHILDREN}
+    discards = []
+
+    all_idx = list(range(n))
+
+    if G == 1:
+        only = list(scenario_set)[0]
+        allocations[only] = all_idx[:]
+
+    elif G == 2:
+        a, b = scenario
+        L, R = partition_two_way([A[i] for i in all_idx])
+        sumL = sum(A[i] for i in L)
+        sumR = sum(A[i] for i in R)
+
+        if fav in scenario_set:
+            other = b if a == fav else a
+            if sumL >= sumR:
+                allocations[fav] = L
+                allocations[other] = R
+            else:
+                allocations[fav] = R
+                allocations[other] = L
+        else:
+            # Must equalize exactly by discarding if possible
+            newL, newR, discard_idxs = exact_discard_from_larger(A, L, R)
+
+            # If still not exactly equal, enforce equality via global fallback
+            if sum(A[i] for i in newL) != sum(A[i] for i in newR):
+                eqL, eqR, extra_discards = fallback_equalize_globally(A)
+                allocations[a] = eqL
+                allocations[b] = eqR
+                discards.extend(extra_discards)
+            else:
+                allocations[a] = newL
+                allocations[b] = newR
+                discards.extend(discard_idxs)
+
+    else:  # G == 3
+        T1, T2, T3 = three_way_partition([A[i] for i in all_idx])
+        triple = [T1, T2, T3]
+        sums = [sum(A[i] for i in part) for part in triple]
+
+        if fav in scenario_set:
+            # Priority order: favorite -> second favorite -> remaining
+            pri = [fav, second_fav] + [x for x in GRANDCHILDREN if x not in (fav, second_fav)]
+            pri = [x for x in pri if x in scenario_set]
+        else:
+            # No favorite in scenario: assign largest->first listed, etc. (deterministic)
+            pri = list(scenario)
+
+        order = sorted(range(3), key=lambda k: sums[k], reverse=True)
+        for i, child in enumerate(pri):
+            allocations[child] = triple[order[i]]
+
+    # Print allocations for all three grandchildren
+    if verbose:
+        for child in GRANDCHILDREN:
+            cards_allocated = sorted(allocations[child])
+            value_sum = sum(A[i] for i in cards_allocated)
+            card_list_str = ", ".join(str(i + 1) for i in cards_allocated) if cards_allocated else "0"
+            print(f">> {child.capitalize()} would get cards {card_list_str} with a total value of ${value_sum}")
+
+        # Discards
+        if discards:
+            discards = sorted(set(discards))
+            print(f">> Card(s) discarded: {', '.join(str(i + 1) for i in discards)}")
+        else:
+            print(">> No cards were excluded")
+
+    return allocations
+
