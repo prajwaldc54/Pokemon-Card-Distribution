@@ -311,4 +311,101 @@ def PDC_ca3(A, G, fav_name=None, random_seed=None, verbose=True):
             print(">> No cards were excluded")
 
     return allocations
+# ---------------------------------------------------------
+# Extra Credit: generalized k-partition (PDC_ec_ca3)
+# ---------------------------------------------------------
+
+def PDC_ec_ca3(A, G, verbose=True):
+    """
+    Extra credit: general G (no favorites).
+    Heuristic: repeatedly subset-sum ~ remaining_total/(remaining_groups) on remaining cards.
+    """
+    n = len(A)
+    total = sum(A)
+    remaining = list(range(n))
+    allocations = [[] for _ in range(G)]
+
+    for g in range(G):
+        if not remaining:
+            break
+        rem_sum = sum(A[i] for i in remaining)
+        target = rem_sum // (G - g)
+        vals = [A[i] for i in remaining]
+        picked_rel, _ = subset_sum_indices(vals, target)
+        picked_abs = [remaining[j] for j in picked_rel]
+        allocations[g] = picked_abs
+        pick_set = set(picked_abs)
+        remaining = [i for i in remaining if i not in pick_set]
+
+    if verbose:
+        print("\n\n*** Extra Credit ***\n")
+        print(f"Distribution for {G} grandchildren (no favorites). Total value: ${total}")
+        for g, bucket in enumerate(allocations, start=1):
+            s = sum(A[i] for i in bucket)
+            lab = ", ".join(str(i + 1) for i in sorted(bucket)) if bucket else "0"
+            print(f">> Grandchild {g} gets cards {lab} with a total value of ${s}")
+
+    return allocations
+
+# ---------------------------------------------------------
+# Experiments harness (time + memory to CSV)
+# ---------------------------------------------------------
+
+def run_experiments(random_seed=7, filename="experiments_pd_ca3.csv"):
+    """
+    Runs runtime + memory experiments for:
+      - Main assignment: G in {1, 2, 3}
+      - Extra credit: G in {1..16}
+    Saves CSV with columns: n,G,time_sec,peak_kb,mode
+      where mode = "main" or "extra"
+    """
+    random.seed(random_seed)
+    sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    rows = ["n,G,time_sec,peak_kb,mode"]
+
+    for n in sizes:
+        A = [random.randint(1, 50) for _ in range(n)]
+
+        # ---- Main assignment (G = 1,2,3) ----
+        for G in [1, 2, 3]:
+            tracemalloc.start()
+            t0 = time.perf_counter()
+            PDC_ca3(A, G, fav_name=MY_FAVORITE, random_seed=random_seed, verbose=False)
+            elapsed = time.perf_counter() - t0
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            rows.append(f"{n},{G},{elapsed:.6f},{peak/1024:.2f},main")
+
+        # ---- Extra credit (G = 1..16) ----
+        for G in range(1, 17):
+            tracemalloc.start()
+            t0 = time.perf_counter()
+            PDC_ec_ca3(A, G, verbose=False)
+            elapsed = time.perf_counter() - t0
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            rows.append(f"{n},{G},{elapsed:.6f},{peak/1024:.2f},extra")
+
+    with open(filename, "w") as f:
+        f.write("\n".join(rows))
+    print(f"\nSaved experiment results to {filename}")
+
+
+# ---------------------------------------------------------
+# Demo / main
+# ---------------------------------------------------------
+
+if __name__ == "__main__":
+    # Example from the prompt
+    A = [2, 1, 3, 1, 5, 2, 3, 4]
+
+    # Main assignment (favorite computed from initials -> Melanie)
+    PDC_ca3(A, 2)
+    PDC_ca3(A, 3)
+
+    # Extra credit demo
+    PDC_ec_ca3(A, 3)
+
+    # Experiments
+    run_experiments(random_seed=11)
 
